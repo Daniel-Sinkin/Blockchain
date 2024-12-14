@@ -21,6 +21,10 @@ class Transaction:
         print(self.format())
 
 
+def compute_merkle_root(transactions: list[Transaction]) -> str:
+    raise NotImplementedError
+
+
 class Block:
     def __init__(
         self,
@@ -35,6 +39,10 @@ class Block:
         self.transactions = transactions
         self.previous_hash = previous_hash
         self.nonce = nonce
+        try:
+            self.merkle_root = self.merkle_root()
+        except NotImplementedError:
+            self.merkle_root = None
 
     def __repr__(self):
         return (
@@ -65,11 +73,23 @@ class Block:
     def pprint(self) -> None:
         print(self.format())
 
+    def compute_merkle_root(self) -> str:
+        compute_merkle_root(self.transactions)
+
     def get_hash(self) -> str:
         encryption = hashlib.sha256()
-        encryption.update(
-            f"{self.index}{self.timestamp}{self.transactions}{self.previous_hash}{self.nonce}".encode()
-        )
+
+        if self.merkle_root is None:
+            tsxs_string = "".join(
+                f"{tsx.sender}{tsx.receiver}{tsx.amount}" for tsx in self.transactions
+            )
+            encryption.update(
+                f"{self.index}{self.timestamp}{tsxs_string}{self.previous_hash}{self.nonce}".encode()
+            )
+        else:
+            encryption.update(
+                f"{self.index}{self.timestamp}{self.merkle_root}{self.previous_hash}{self.nonce}".encode()
+            )
         return encryption.hexdigest()
 
     @property
@@ -83,7 +103,7 @@ class Blockchain:
         self.difficulty: int = difficulty
         self.mining_reward: int = mining_reward
 
-        self._adress: str = "BlockchainSystem"
+        self._address: str = "BlockchainSystem"
 
         self.blocks: list[Block] = [self._mine_genesis_block()]
 
@@ -117,7 +137,7 @@ class Blockchain:
         print(self.format())
 
     def adress(self) -> None:
-        return self._adress
+        return self._address
 
     def _mine_genesis_block(self) -> Block:
         # Could hardcode the result from this rather than recompute.
@@ -174,10 +194,9 @@ class Blockchain:
             print("No more transactions pending, so no block will be mined.")
             return False
 
-        reward_transaction = Transaction(
-            sender=self._adress, receiver=miner_address, amount=self.mining_reward
+        self.create_and_add_transaction(
+            sender=self._address, receiver=miner_address, amount=self.mining_reward
         )
-        self.add_transaction(reward_transaction)
 
         new_block = Block(
             index=len(self.blocks),
@@ -213,3 +232,15 @@ class Blockchain:
             if b2.previous_hash != b1.hash:
                 return False
         return True
+
+    def get_adress_balance(self, adress: str) -> int:
+        balance = 0
+        for block in self.blocks:
+            for tsx in block.transactions:
+                if tsx.sender == adress:
+                    balance -= tsx.amount
+                if tsx.receiver == adress:
+                    balance += tsx.amount
+        return balance
+
+    def resolve_conflits(self, other_chains: list["Blockchain"]) -> bool: ...
