@@ -164,7 +164,26 @@ class Blockchain:
         return self.address
 
     def _mine_genesis_block(self) -> Block:
-        # Could hardcode the result from this rather than recompute.
+        # Cached nonce values for difficulties as the default genesis timestamp
+        difficulty_to_nonce_map = {1: 1, 2: 80, 3: 14288, 4: 116009, 5: 139523}
+        if (
+            self._genesis_timestamp == dt.datetime(2024, 12, 15, tzinfo=dt.timezone.utc)
+            and self.difficulty in difficulty_to_nonce_map
+        ):
+            genesis_block = Block(
+                index=0,
+                timestamp=self._genesis_timestamp,
+                transactions=[],
+                previous_hash="0" * 64,
+                nonce=difficulty_to_nonce_map[self.difficulty],
+            )
+            logger.info(
+                "Using cached genesis block for timestamp=%s, difficulty=%d",
+                self._genesis_timestamp,
+                self.difficulty,
+            )
+            logger.info("%s", genesis_block.format())
+            return genesis_block
 
         genesis_block = Block(
             index=0,
@@ -175,6 +194,7 @@ class Blockchain:
         )
         while not genesis_block.hash.startswith("0" * self.difficulty):
             genesis_block.nonce += 1
+        print(f"{genesis_block.nonce=}")
 
         return genesis_block
 
@@ -250,5 +270,3 @@ class Blockchain:
                 if tsx.receiver == address:
                     balance += tsx.amount
         return balance
-
-    def resolve_conflits(self, other_chains: list["Blockchain"]) -> bool: ...
