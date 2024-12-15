@@ -67,22 +67,43 @@ class Wallet:
 class Transaction:
     def __init__(self, sender_address: str, receiver_address: str, amount: int):
         self.sender_address = sender_address
-        self.receiver = receiver_address
+        self.receiver_address = receiver_address
         self.amount = amount
         self.signature = None
         self.public_key = None
 
     def __repr__(self):
-        return f"Transaction({self.sender_address},{self.receiver},{self.amount})"
+        return (
+            f"Transaction({self.sender_address},{self.receiver_address},{self.amount})"
+        )
 
     def __str__(self):
         return self.__repr__()
 
     def format(self) -> str:
-        return f"{self.sender_address} sends {self.amount} DSC to {self.receiver}."
+        return (
+            f"{self.sender_address} sends {self.amount} DSC to {self.receiver_address}."
+        )
+
+    def to_dict(self) -> dict[str, any]:
+        if self.public_key is None:
+            public_key = None
+        else:
+            public_key = (
+                self.public_key.removeprefix("-----BEGIN PUBLIC KEY-----\n")
+                .removesuffix("\n-----END PUBLIC KEY-----\n")
+                .strip()
+            )
+        return {
+            "sender_address": self.sender_address,
+            "receiver_address": self.receiver_address,
+            "amount": self.amount,
+            "signature": self.signature,
+            "public_key": public_key,
+        }
 
     def to_hashable(self) -> str:
-        return f"{self.sender_address}{self.receiver}{self.amount}"
+        return f"{self.sender_address}{self.receiver_address}{self.amount}"
 
     def to_hashable_bytes(self) -> bytes:
         return self.to_hashable().encode()
@@ -177,11 +198,20 @@ class Block:
         return (
             f"Block {self.index}:\n"
             f"  Timestamp: {self.timestamp}\n"
-            f"  Transactions: {self._transactions})\n"
+            f"  Transactions: {self._transactions}\n"
             f"  Previous Hash: {self.previous_hash}\n"
             f"  Nonce: {self.nonce}\n"
             f"  Hash: {self.hash}"
         )
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "index": self.index,
+            "timestamp": str(self.timestamp),
+            "transactions": [tsx.to_dict() for tsx in self._transactions],
+            "previous_hash": self.previous_hash,
+            "nonce": self.nonce,
+        }
 
     def compute_merkle_root(self) -> str:
         return compute_merkle_root(self._transactions)
@@ -260,7 +290,8 @@ class Blockchain:
         return self._pending_transactions.copy()
 
     def format(self) -> str:
-        block_details = "\n\n".join(block.format() for block in self.blocks)
+        blocks = self.block_storage.get_all_blocks()
+        block_details = "\n\n".join(block.format() for block in blocks)
         return (
             f"Blockchain Overview:\n"
             f"  Difficulty: {self.difficulty}\n"
@@ -268,6 +299,18 @@ class Blockchain:
             f"  Pending Transactions: {self._pending_transactions}\n"
             f"  Blocks:\n\n{block_details}"
         )
+
+    def to_dict(self) -> dict[str, any]:
+        return {
+            "difficulty": self.difficulty,
+            "mining_reward": self.mining_reward,
+            "pending_transactions": [
+                tsx.to_dict() for tsx in self._pending_transactions
+            ],
+            "blocks": [
+                block.to_dict() for block in self.block_storage.get_all_blocks()
+            ],
+        }
 
     def adress(self) -> None:
         return self.address
@@ -377,7 +420,7 @@ class Blockchain:
             for tsx in block._transactions:
                 if tsx.sender_address == address:
                     balance -= tsx.amount
-                if tsx.receiver == address:
+                if tsx.receiver_address == address:
                     balance += tsx.amount
         return balance
 
@@ -387,3 +430,15 @@ class Blockchain:
         )
         self._pending_transactions = [coinbase_transaction] + self._pending_transactions
         logger.info(f"Minted {amount} coins, awarding them to {address}.")
+
+
+class Miner:
+    def __init__(self, wallet: Wallet, blockchain: Blockchain):
+        self.wallet = wallet
+        self.blockchain = blockchain
+
+    def mine_block(self) -> bool:
+        return self.blockchain.mine_block(self.wallet.address)
+
+    def get_balance(self) -> int:
+        return self.blockchain.get_adress_balance(self.wallet.address)
