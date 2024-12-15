@@ -1,6 +1,6 @@
 import datetime as dt
 
-from src.blockchain import Blockchain
+from src.blockchain import Blockchain, Transaction, Wallet
 
 
 def test_blockchain_init() -> None:
@@ -24,46 +24,46 @@ def test_blockchain_init() -> None:
 
 
 def test_blockchain_mining() -> None:
+    alice = Wallet()
+    bob = Wallet()
+    miner = Wallet()
+
     bc = Blockchain(difficulty=4, mining_reward=100)
-    genesis_block = bc.blocks[0]
-    bc.create_and_add_transaction(sender=bc.address, receiver="Alice", amount=30)
-    assert len(bc.get_pending_transactions()) == 1
-    bc.create_and_add_transaction(sender=bc.address, receiver="Bob", amount=100)
-    assert len(bc.get_pending_transactions()) == 2
+    assert len(bc.blocks) == 1
 
-    assert bc.get_adress_balance("Alice") == 0
-    assert bc.get_adress_balance("Bob") == 0
+    bc.mint(alice.address, 300)
+    bc.mint(bob.address, 200)
 
-    bc.mine_block(miner_address="Mr. Miner")
-    assert len(bc.get_pending_transactions()) == 0
+    assert bc.get_adress_balance(alice.address) == 0
+    assert bc.get_adress_balance(bob.address) == 0
+    assert bc.get_adress_balance(miner.address) == 0
 
-    assert bc.get_adress_balance("Alice") == 30
-    assert bc.get_adress_balance("Bob") == 100
-    assert bc.get_adress_balance("Mr. Miner") == 100
-
-    assert len(bc.blocks) == 2
-    new_block = bc.blocks[1]
-    new_block.index == 1
-    len(new_block.get_transactions()) == 3  # 2 transactions + 1 for the miner
-    new_block.previous_hash == genesis_block.hash
-
-    bc.mine_block(miner_address="Miner Jr.")
+    assert bc.mine_block(miner.address)
     assert len(bc.blocks) == 2
 
-    assert bc.get_adress_balance("Alice") == 30
-    assert bc.get_adress_balance("Bob") == 100
-    assert bc.get_adress_balance("Mr. Miner") == 100
-    assert bc.get_adress_balance("Miner Jr.") == 0
+    assert bc.get_adress_balance(alice.address) == 300
+    assert bc.get_adress_balance(bob.address) == 200
+    assert bc.get_adress_balance(miner.address) == 100
 
-    bc.create_and_add_transaction(sender="Bob", receiver="Alice", amount=40)
-    assert len(bc.get_pending_transactions()) == 1
-    bc.mine_block(miner_address="Mr. Miner")
+    tsx = Transaction(
+        sender_address=alice.address, receiver_address=bob.address, amount=150
+    )
+    bc.add_transaction(tsx)  # Not signed
+    bc.mine_block(miner.address)
+    assert bc.get_adress_balance(miner.address) == 100
+    assert len(bc.blocks) == 2
+
+    tsx.sign(bob)  # Wrong
+    bc.add_transaction(tsx)  # Not signed
+    bc.mine_block(miner.address)
+    assert bc.get_adress_balance(miner.address) == 100
+    assert len(bc.blocks) == 2
+
+    tsx.sign(alice)
+    bc.add_transaction(tsx)
+    bc.mine_block(miner.address)
+    assert bc.get_adress_balance(miner.address) == 200
     assert len(bc.blocks) == 3
-    assert bc.blocks[2].index == 2
-    assert len(bc.blocks[2].get_transactions()) == 2
 
-    assert bc.get_adress_balance("Alice") == 70
-    assert bc.get_adress_balance("Bob") == 60
-    assert bc.get_adress_balance("Mr. Miner") == 2 * 100
-    assert bc.get_adress_balance("Miner Jr.") == 0
-    assert bc.get_adress_balance(bc.address) == -330
+    assert bc.get_adress_balance(alice.address) == 150
+    assert bc.get_adress_balance(bob.address) == 350

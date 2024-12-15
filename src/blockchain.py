@@ -4,30 +4,116 @@ from logging import INFO as LOG_INFO_LEVEL
 from logging import Logger
 from typing import Optional
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import (
+    decode_dss_signature,
+    encode_dss_signature,
+)
+
 logger = Logger(__name__)
 logger.setLevel(LOG_INFO_LEVEL)
 
 
+class Wallet:
+    def __init__(self):
+        self._private_key = ec.generate_private_key(ec.SECP256R1())
+        self._public_key = self._private_key.public_key()
+        self.address = hashlib.sha256(self.public_key.encode()).hexdigest()
+
+    def get_public_key(self) -> str:
+        """
+        Return the (serialized) public key of this wallet.
+        """
+        return self._public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+
+    @property
+    def public_key(self) -> str:
+        return self.get_public_key()
+
+    def sign(self, data: bytes) -> str:
+        """
+        Sign data using the private key of this wallet.
+        """
+        signature = self._private_key.sign(data, ec.ECDSA(hashes.SHA256()))
+        r, s = decode_dss_signature(signature)
+        return f"{r}:{s}"
+
+    @staticmethod
+    def verify(public_key_pem: str, data: bytes, signature: str) -> bool:
+        """
+        Verify signature using the provided public key
+        """
+        try:
+            public_key = serialization.load_pem_public_key(public_key_pem.encode())
+            r_str, s_str = signature.split(":")
+            r, s = int(r_str), int(s_str)
+
+            signature_bytes = encode_dss_signature(r, s)
+            public_key.verify(signature_bytes, data, ec.ECDSA(hashes.SHA256()))
+            return True
+        except InvalidSignature:
+            logger.info("Invalid Signature.")
+            return False
+        except Exception as e:
+            logger.warning(f"Verification error: {e}")
+            return False
+
+
 class Transaction:
-    def __init__(self, sender: str, receiver: str, amount: int):
-        self.sender = sender
-        self.receiver = receiver
+    def __init__(self, sender_address: str, receiver_address: str, amount: int):
+        self.sender_address = sender_address
+        self.receiver = receiver_address
         self.amount = amount
+        self.signature = None
+        self.public_key = None
 
     def __repr__(self):
-        return f"Transaction({self.sender},{self.receiver},{self.amount})"
+        return f"Transaction({self.sender_address},{self.receiver},{self.amount})"
 
     def __str__(self):
         return self.__repr__()
 
     def format(self) -> str:
-        return f"{self.sender} sends {self.amount} DSC to {self.receiver}."
+        return f"{self.sender_address} sends {self.amount} DSC to {self.receiver}."
 
     def to_hashable(self) -> str:
-        return f"{self.sender}{self.receiver}{self.amount}"
+        return f"{self.sender_address}{self.receiver}{self.amount}"
 
     def to_hashable_bytes(self) -> bytes:
         return self.to_hashable().encode()
+
+    def sign(self, sender_wallet: Wallet) -> bool:
+        """
+        Sign the transaction using the senders wallet.
+
+        Returns true is signing was successful.
+        """
+        if sender_wallet.address != self.sender_address:
+            logger.warning("Trying to sign with non-sender wallet!")
+            return False
+        self.signature = sender_wallet.sign(self.to_hashable_bytes())
+        self.public_key = sender_wallet.public_key
+
+        return True
+
+    def is_signed(self) -> bool:
+        return (self.signature is not None) and (self.public_key is not None)
+
+    def verify(self) -> bool:
+        if not self.is_signed:
+            logger.warning("Trying to verify unsigned transaction.")
+            return False
+        is_valid = Wallet.verify(
+            public_key_pem=self.public_key,
+            data=self.to_hashable_bytes(),
+            signature=self.signature,
+        )
+        return is_valid
 
 
 def compute_merkle_root(transactions: list[Transaction]) -> str:
@@ -123,7 +209,7 @@ class Blockchain:
         self.difficulty: int = difficulty
         self.mining_reward: int = mining_reward
 
-        self.address: str = "BlockchainSystem"
+        self.address: str = "BlockchainMint"
 
         if genesis_timestamp is None:
             self._genesis_timestamp = dt.datetime(2024, 12, 14, tzinfo=dt.timezone.utc)
@@ -134,18 +220,11 @@ class Blockchain:
     def __repr__(self):
         return (
             f"Blockchain(difficulty={self.difficulty}, mining_reward={self.mining_reward}, "
-            f"blocks={len(self.blocks)}, pending_transactions={len(self._pending_transactions)})"
+            f"blocks={len(self.blocks)}, pending_transactions={len(self._pending_transactions)}"
         )
 
     def __str__(self):
-        block_summaries = "\n".join(block.format() for block in self.blocks)
-        return (
-            f"Blockchain:\n"
-            f"Difficulty: {self.difficulty}\n"
-            f"Mining Reward: {self.mining_reward}\n"
-            f"Blocks:\n{block_summaries}\n"
-            f"Pending Transactions: {', '.join(self._pending_transactions) if self._pending_transactions else 'None'}"
-        )
+        return self.__repr__()
 
     def get_pending_transactions(self) -> list[Transaction]:
         return self._pending_transactions.copy()
@@ -156,7 +235,7 @@ class Blockchain:
             f"Blockchain Overview:\n"
             f"  Difficulty: {self.difficulty}\n"
             f"  Mining Reward: {self.mining_reward}\n"
-            f"  Pending Transactions: {', '.join(self._pending_transactions) if self._pending_transactions else 'None'}\n"
+            f"  Pending Transactions: {self._pending_transactions}\n"
             f"  Blocks:\n\n{block_details}"
         )
 
@@ -194,20 +273,36 @@ class Blockchain:
         )
         while not genesis_block.hash.startswith("0" * self.difficulty):
             genesis_block.nonce += 1
-        print(f"{genesis_block.nonce=}")
+        logger.info(f"{genesis_block.nonce=}")
 
         return genesis_block
 
     def add_transaction(self, transaction: Transaction) -> None:
+        if transaction.sender_address == self.address:
+            logger.warning(
+                "Trying to add coinbase transactions via normal transaction."
+            )
+            return
+        if not transaction.verify():
+            logger.warning(f"Transaction verifiation failed: {transaction.format()}")
+            return
         logger.info(f"Added new transactions: {transaction.format()}")
         self._pending_transactions.append(transaction)
 
     def create_and_add_transaction(
-        self, sender: str, receiver: str, amount: int
+        self, sender: Wallet | str, receiver: str, amount: int
     ) -> None:
-        self.add_transaction(
-            Transaction(sender=sender, receiver=receiver, amount=amount)
+        """
+        Normal transactions require the sender to be a wallet, but the blockchain coinbase
+        transactions can "mint" new coins, for that we just enter the special address as a string.
+        """
+        if isinstance(sender, Wallet):
+            sender = sender.address
+        transaction = Transaction(
+            sender_address=sender, receiver_address=receiver, amount=amount
         )
+        transaction.sign(sender)
+        self.add_transaction(transaction)
 
     def add_block(self, block: Block) -> bool:
         if block.previous_hash != self.blocks[-1].hash:
@@ -227,9 +322,7 @@ class Blockchain:
             logger.info("No more transactions pending, so no block will be mined.")
             return False
 
-        self.create_and_add_transaction(
-            sender=self.address, receiver=miner_address, amount=self.mining_reward
-        )
+        self.mint(miner_address, self.mining_reward)
 
         new_block = Block(
             index=len(self.blocks),
@@ -265,8 +358,15 @@ class Blockchain:
         balance = 0
         for block in self.blocks:
             for tsx in block._transactions:
-                if tsx.sender == address:
+                if tsx.sender_address == address:
                     balance -= tsx.amount
                 if tsx.receiver == address:
                     balance += tsx.amount
         return balance
+
+    def mint(self, address: str, amount: int) -> None:
+        coinbase_transaction = Transaction(
+            sender_address=self.address, receiver_address=address, amount=amount
+        )
+        self._pending_transactions = [coinbase_transaction] + self._pending_transactions
+        logger.info(f"Minted {amount} coins, awarding them to {address}.")
