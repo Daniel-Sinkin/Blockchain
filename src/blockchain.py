@@ -2,7 +2,7 @@ import datetime as dt
 import hashlib
 from logging import INFO as LOG_INFO_LEVEL
 from logging import Logger
-from typing import Optional
+from typing import Optional, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
@@ -198,12 +198,38 @@ class Block:
         return self.get_hash()
 
 
+class BlockStorageInterface(Protocol):
+    def get_all_blocks(self) -> list["Block"]: ...
+    def get_num_blocks(self) -> int: ...
+    def add_block(self, block: "Block") -> bool: ...
+    def get_latest_block(self) -> "Block": ...
+
+
+class InMemoryBlockStorage:
+    def __init__(self) -> None:
+        self._blocks: list["Block"] = []
+
+    def get_all_blocks(self) -> list["Block"]:
+        return self._blocks.copy()
+
+    def get_num_blocks(self) -> int:
+        return len(self._blocks)
+
+    def add_block(self, block: "Block") -> bool:
+        self._blocks.append(block)
+        return True
+
+    def get_latest_block(self) -> "Block":
+        return self._blocks[-1]
+
+
 class Blockchain:
     def __init__(
         self,
         difficulty: int = 4,
         mining_reward: int = 100,
         genesis_timestamp: Optional[dt.datetime] = None,
+        block_storage: Optional[BlockStorageInterface] = None,
     ):
         self._pending_transactions: list[Transaction] = []
         self.difficulty: int = difficulty
@@ -211,16 +237,20 @@ class Blockchain:
 
         self.address: str = "BlockchainMint"
 
+        self.block_storage: BlockStorageInterface = (
+            block_storage if block_storage is not None else InMemoryBlockStorage()
+        )
+
         if genesis_timestamp is None:
             self._genesis_timestamp = dt.datetime(2024, 12, 14, tzinfo=dt.timezone.utc)
         else:
             self._genesis_timestamp = genesis_timestamp
-        self.blocks: list[Block] = [self._mine_genesis_block()]
+        self.block_storage.add_block(self._mine_genesis_block())
 
     def __repr__(self):
         return (
             f"Blockchain(difficulty={self.difficulty}, mining_reward={self.mining_reward}, "
-            f"blocks={len(self.blocks)}, pending_transactions={len(self._pending_transactions)}"
+            f"blocks={self.block_storage.get_num_blocks()}, pending_transactions={len(self._pending_transactions)}"
         )
 
     def __str__(self):
@@ -289,23 +319,8 @@ class Blockchain:
         logger.info(f"Added new transactions: {transaction.format()}")
         self._pending_transactions.append(transaction)
 
-    def create_and_add_transaction(
-        self, sender: Wallet | str, receiver: str, amount: int
-    ) -> None:
-        """
-        Normal transactions require the sender to be a wallet, but the blockchain coinbase
-        transactions can "mint" new coins, for that we just enter the special address as a string.
-        """
-        if isinstance(sender, Wallet):
-            sender = sender.address
-        transaction = Transaction(
-            sender_address=sender, receiver_address=receiver, amount=amount
-        )
-        transaction.sign(sender)
-        self.add_transaction(transaction)
-
     def add_block(self, block: Block) -> bool:
-        if block.previous_hash != self.blocks[-1].hash:
+        if block.previous_hash != self.block_storage.get_latest_block().hash:
             logger.warning("Invalid Block: Previous Hash Mismatch.")
             return False
 
@@ -313,7 +328,7 @@ class Blockchain:
             logger.warning("Invalid Block: Proof-Of-Work does not meet difficulty")
             return False
 
-        self.blocks.append(block)
+        self.block_storage.add_block(block)
         logger.info("Block successfully added to the chain.")
         return True
 
@@ -325,10 +340,10 @@ class Blockchain:
         self.mint(miner_address, self.mining_reward)
 
         new_block = Block(
-            index=len(self.blocks),
+            index=self.block_storage.get_num_blocks(),
             timestamp=dt.datetime.now(tz=dt.timezone.utc),
             transactions=self._pending_transactions.copy(),
-            previous_hash=self.blocks[-1].hash,
+            previous_hash=self.block_storage.get_latest_block().hash,
             nonce=0,
         )
 
@@ -345,18 +360,20 @@ class Blockchain:
         return True
 
     def is_valid(self) -> bool:
-        for b in self.blocks:
+        blocks = self.block_storage.get_all_blocks()
+        for b in blocks:
             if not b.hash.startswith("0" * self.difficulty):
                 return False
 
-        for b1, b2 in zip(self.blocks[:-1], self.blocks[1:]):
+        for b1, b2 in zip(blocks[:-1], blocks[1:]):
             if b2.previous_hash != b1.hash:
                 return False
         return True
 
     def get_adress_balance(self, address: str) -> int:
+        blocks = self.block_storage.get_all_blocks()
         balance = 0
-        for block in self.blocks:
+        for block in blocks:
             for tsx in block._transactions:
                 if tsx.sender_address == address:
                     balance -= tsx.amount

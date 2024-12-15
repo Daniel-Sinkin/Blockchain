@@ -15,8 +15,8 @@ def test_blockchain_init() -> None:
             )
             assert len(bc.get_pending_transactions()) == 0
 
-            assert len(bc.blocks) == 1
-            genesis_block = bc.blocks[0]
+            assert len(bc.block_storage.get_all_blocks()) == 1
+            genesis_block = bc.block_storage.get_all_blocks()[0]
             assert genesis_block.hash.startswith("0" * bc.difficulty)
             assert len(genesis_block.get_transactions()) == 0
             assert genesis_block.previous_hash == "0" * 64
@@ -29,7 +29,7 @@ def test_blockchain_mining() -> None:
     miner = Wallet()
 
     bc = Blockchain(difficulty=4, mining_reward=100)
-    assert len(bc.blocks) == 1
+    assert len(bc.block_storage.get_all_blocks()) == 1
 
     bc.mint(alice.address, 300)
     bc.mint(bob.address, 200)
@@ -39,7 +39,7 @@ def test_blockchain_mining() -> None:
     assert bc.get_adress_balance(miner.address) == 0
 
     assert bc.mine_block(miner.address)
-    assert len(bc.blocks) == 2
+    assert len(bc.block_storage.get_all_blocks()) == 2
 
     assert bc.get_adress_balance(alice.address) == 300
     assert bc.get_adress_balance(bob.address) == 200
@@ -51,19 +51,19 @@ def test_blockchain_mining() -> None:
     bc.add_transaction(tsx)  # Not signed
     bc.mine_block(miner.address)
     assert bc.get_adress_balance(miner.address) == 100
-    assert len(bc.blocks) == 2
+    assert len(bc.block_storage.get_all_blocks()) == 2
 
     tsx.sign(bob)  # Wrong
     bc.add_transaction(tsx)  # Not signed
     bc.mine_block(miner.address)
     assert bc.get_adress_balance(miner.address) == 100
-    assert len(bc.blocks) == 2
+    assert len(bc.block_storage.get_all_blocks()) == 2
 
     tsx.sign(alice)
     bc.add_transaction(tsx)
     bc.mine_block(miner.address)
     assert bc.get_adress_balance(miner.address) == 200
-    assert len(bc.blocks) == 3
+    assert len(bc.block_storage.get_all_blocks()) == 3
 
     assert bc.get_adress_balance(alice.address) == 150
     assert bc.get_adress_balance(bob.address) == 350
