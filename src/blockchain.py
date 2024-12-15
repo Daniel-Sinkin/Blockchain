@@ -129,12 +129,11 @@ class Transaction:
         if not self.is_signed:
             logger.warning("Trying to verify unsigned transaction.")
             return False
-        is_valid = Wallet.verify(
+        return Wallet.verify(
             public_key_pem=self.public_key,
             data=self.to_hashable_bytes(),
             signature=self.signature,
         )
-        return is_valid
 
 
 def compute_merkle_root(transactions: list[Transaction]) -> str:
@@ -178,31 +177,14 @@ class Block:
     def __repr__(self):
         return (
             f"Block(index={self.index}, timestamp={self.timestamp!r}, "
-            f"transactions={self._transactions!r}, previous_hash={self.previous_hash!r}, nonce={self.nonce})"
+            f"transactions={self._transactions}, previous_hash={self.previous_hash!r}, nonce={self.nonce})"
         )
 
     def __str__(self):
-        return (
-            f"Block {self.index}:\n"
-            f"Timestamp: {self.timestamp}\n"
-            f"Transactions: {self._transactions}\n"
-            f"Previous Hash: {self.previous_hash}\n"
-            f"Nonce: {self.nonce}\n"
-            f"Hash: {self.hash}"
-        )
+        return self.__repr__()
 
     def get_transactions(self) -> list[Transaction]:
         return self._transactions.copy()
-
-    def format(self) -> str:
-        return (
-            f"Block {self.index}:\n"
-            f"  Timestamp: {self.timestamp}\n"
-            f"  Transactions: {self._transactions}\n"
-            f"  Previous Hash: {self.previous_hash}\n"
-            f"  Nonce: {self.nonce}\n"
-            f"  Hash: {self.hash}"
-        )
 
     def to_dict(self) -> dict[str, str]:
         return {
