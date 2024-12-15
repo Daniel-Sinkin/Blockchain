@@ -1,5 +1,11 @@
 import datetime as dt
 import hashlib
+from logging import INFO as LOG_INFO_LEVEL
+from logging import Logger
+from typing import Optional
+
+logger = Logger(__name__)
+logger.setLevel(LOG_INFO_LEVEL)
 
 
 class Transaction:
@@ -17,12 +23,33 @@ class Transaction:
     def format(self) -> str:
         return f"{self.sender} sends {self.amount} DSC to {self.receiver}."
 
-    def pprint(self) -> None:
-        print(self.format())
+    def to_hashable(self) -> str:
+        return f"{self.sender}{self.receiver}{self.amount}"
+
+    def to_hashable_bytes(self) -> bytes:
+        return self.to_hashable().encode()
 
 
 def compute_merkle_root(transactions: list[Transaction]) -> str:
-    raise NotImplementedError
+    """Compute the Merkle root from a list of transactions."""
+    if not transactions:
+        return hashlib.sha256(b"").hexdigest()
+
+    hashes = [
+        hashlib.sha256(tsx.to_hashable_bytes()).hexdigest() for tsx in transactions
+    ]
+
+    while len(hashes) > 1:
+        temp_hashes = []
+        for i in range(0, len(hashes), 2):
+            if i + 1 < len(hashes):
+                combined = hashes[i] + hashes[i + 1]
+            else:  # If it's the last hash and no pair, duplicate it
+                combined = hashes[i] + hashes[i]
+            temp_hashes.append(hashlib.sha256(combined.encode()).hexdigest())
+        hashes = temp_hashes
+
+    return hashes[0]
 
 
 class Block:
@@ -36,60 +63,48 @@ class Block:
     ):
         self.index = index
         self.timestamp = timestamp
-        self.transactions = transactions
+        self._transactions = transactions
         self.previous_hash = previous_hash
         self.nonce = nonce
-        try:
-            self.merkle_root = self.merkle_root()
-        except NotImplementedError:
-            self.merkle_root = None
+        self.merkle_root = self.compute_merkle_root()
 
     def __repr__(self):
         return (
             f"Block(index={self.index}, timestamp={self.timestamp!r}, "
-            f"transactions={self.transactions!r}, previous_hash={self.previous_hash!r}, nonce={self.nonce})"
+            f"transactions={self._transactions!r}, previous_hash={self.previous_hash!r}, nonce={self.nonce})"
         )
 
     def __str__(self):
         return (
             f"Block {self.index}:\n"
             f"Timestamp: {self.timestamp}\n"
-            f"Transactions: {self.transactions}\n"
+            f"Transactions: {self._transactions}\n"
             f"Previous Hash: {self.previous_hash}\n"
             f"Nonce: {self.nonce}\n"
             f"Hash: {self.hash}"
         )
 
+    def get_transactions(self) -> list[Transaction]:
+        return self._transactions.copy()
+
     def format(self) -> str:
         return (
             f"Block {self.index}:\n"
             f"  Timestamp: {self.timestamp}\n"
-            f"  Transactions: {self.transactions})\n"
+            f"  Transactions: {self._transactions})\n"
             f"  Previous Hash: {self.previous_hash}\n"
             f"  Nonce: {self.nonce}\n"
             f"  Hash: {self.hash}"
         )
 
-    def pprint(self) -> None:
-        print(self.format())
-
     def compute_merkle_root(self) -> str:
-        compute_merkle_root(self.transactions)
+        return compute_merkle_root(self._transactions)
 
     def get_hash(self) -> str:
         encryption = hashlib.sha256()
-
-        if self.merkle_root is None:
-            tsxs_string = "".join(
-                f"{tsx.sender}{tsx.receiver}{tsx.amount}" for tsx in self.transactions
-            )
-            encryption.update(
-                f"{self.index}{self.timestamp}{tsxs_string}{self.previous_hash}{self.nonce}".encode()
-            )
-        else:
-            encryption.update(
-                f"{self.index}{self.timestamp}{self.merkle_root}{self.previous_hash}{self.nonce}".encode()
-            )
+        encryption.update(
+            f"{self.index}{self.timestamp}{self.merkle_root}{self.previous_hash}{self.nonce}".encode()
+        )
         return encryption.hexdigest()
 
     @property
@@ -98,13 +113,22 @@ class Block:
 
 
 class Blockchain:
-    def __init__(self, difficulty: int = 4, mining_reward: int = 100):
+    def __init__(
+        self,
+        difficulty: int = 4,
+        mining_reward: int = 100,
+        genesis_timestamp: Optional[dt.datetime] = None,
+    ):
         self._pending_transactions: list[Transaction] = []
         self.difficulty: int = difficulty
         self.mining_reward: int = mining_reward
 
-        self._address: str = "BlockchainSystem"
+        self.address: str = "BlockchainSystem"
 
+        if genesis_timestamp is None:
+            self._genesis_timestamp = dt.datetime(2024, 12, 14, tzinfo=dt.timezone.utc)
+        else:
+            self._genesis_timestamp = genesis_timestamp
         self.blocks: list[Block] = [self._mine_genesis_block()]
 
     def __repr__(self):
@@ -123,6 +147,9 @@ class Blockchain:
             f"Pending Transactions: {', '.join(self._pending_transactions) if self._pending_transactions else 'None'}"
         )
 
+    def get_pending_transactions(self) -> list[Transaction]:
+        return self._pending_transactions.copy()
+
     def format(self) -> str:
         block_details = "\n\n".join(block.format() for block in self.blocks)
         return (
@@ -133,40 +160,26 @@ class Blockchain:
             f"  Blocks:\n\n{block_details}"
         )
 
-    def pprint(self) -> None:
-        print(self.format())
-
     def adress(self) -> None:
-        return self._address
+        return self.address
 
     def _mine_genesis_block(self) -> Block:
         # Could hardcode the result from this rather than recompute.
-        genesis_timestamp = dt.datetime(2024, 12, 14, tzinfo=dt.timezone.utc)
-        nonce = 0
 
         genesis_block = Block(
             index=0,
-            timestamp=genesis_timestamp,
+            timestamp=self._genesis_timestamp,
             transactions=[],
             previous_hash="0" * 64,
-            nonce=nonce,
+            nonce=0,
         )
-
         while not genesis_block.hash.startswith("0" * self.difficulty):
-            nonce += 1
-            genesis_block = Block(
-                index=0,
-                timestamp=genesis_timestamp,
-                transactions=[],
-                previous_hash="0" * 64,
-                nonce=nonce,
-            )
+            genesis_block.nonce += 1
 
         return genesis_block
 
     def add_transaction(self, transaction: Transaction) -> None:
-        print("Added new transactions:")
-        print(f'    "{transaction.format()}"')
+        logger.info(f"Added new transactions: {transaction.format()}")
         self._pending_transactions.append(transaction)
 
     def create_and_add_transaction(
@@ -178,24 +191,24 @@ class Blockchain:
 
     def add_block(self, block: Block) -> bool:
         if block.previous_hash != self.blocks[-1].hash:
-            print("Invalid Block: Previous Hash Mismatch.")
+            logger.warning("Invalid Block: Previous Hash Mismatch.")
             return False
 
         if not block.hash.startswith("0" * self.difficulty):
-            print("Invalid Block: Proof-Of-Work does not meet difficulty")
+            logger.warning("Invalid Block: Proof-Of-Work does not meet difficulty")
             return False
 
         self.blocks.append(block)
-        print("Block successfully added to the chain.")
+        logger.info("Block successfully added to the chain.")
         return True
 
-    def mine_block(self, miner_address: str, verbose: bool = False) -> bool:
+    def mine_block(self, miner_address: str) -> bool:
         if len(self._pending_transactions) == 0:
-            print("No more transactions pending, so no block will be mined.")
+            logger.info("No more transactions pending, so no block will be mined.")
             return False
 
         self.create_and_add_transaction(
-            sender=self._address, receiver=miner_address, amount=self.mining_reward
+            sender=self.address, receiver=miner_address, amount=self.mining_reward
         )
 
         new_block = Block(
@@ -207,17 +220,12 @@ class Blockchain:
         )
 
         while not new_block.hash.startswith("0" * self.difficulty):
-            if verbose:
-                print(
-                    f"{new_block.nonce:12} - Failed to mine block, block hash: {new_block.hash}"
-                )
+            logger.debug("%12d - Failed to mine block, block hash: ", new_block.hash)
             new_block.nonce += 1
-        print(
-            f"Block mined successfully after {new_block.nonce} attempts: Hash = '{new_block.hash}'."
-        )
+        logger.info(f"Successfully mined block {new_block.format()}")
 
         if not self.add_block(new_block):
-            print("Failed to add the block after mining!")
+            logger.error("Failed to add the block after mining!")
             return False
 
         self._pending_transactions.clear()
@@ -233,13 +241,13 @@ class Blockchain:
                 return False
         return True
 
-    def get_adress_balance(self, adress: str) -> int:
+    def get_adress_balance(self, address: str) -> int:
         balance = 0
         for block in self.blocks:
-            for tsx in block.transactions:
-                if tsx.sender == adress:
+            for tsx in block._transactions:
+                if tsx.sender == address:
                     balance -= tsx.amount
-                if tsx.receiver == adress:
+                if tsx.receiver == address:
                     balance += tsx.amount
         return balance
 
